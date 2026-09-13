@@ -1,0 +1,12 @@
+{
+  "name": "georgia-junkyard-inventory-search",
+  "version": "9.5.5",
+  "private": true,
+  "description": "Georgia junkyard inventory aggregator with connector accuracy, provenance, on-demand Pull-A-Part search, and persistent make catalog",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
