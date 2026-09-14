@@ -2,11 +2,19 @@ const state={inventory:[],yards:[],filtered:[],searchDiagnostics:[]};
 const $=id=>document.getElementById(id);
 const norm=v=>(v??'').toString().trim().toLowerCase();
 const compact=v=>norm(v).replace(/[^a-z0-9]+/g,'');
-const arrivalFmt=new Intl.DateTimeFormat('en-US',{year:'numeric',month:'short',day:'numeric'});
+const arrivalFmt=new Intl.DateTimeFormat('en-US',{year:'numeric',month:'short',day:'numeric',timeZone:'UTC'});
 function formatArrival(row){
- const raw=row?.arrivalDate||row?.arrival; if(!raw)return '—';
- const d=new Date(row?.arrivalDate||(/^\d{4}-\d{2}-\d{2}$/.test(String(raw))?String(raw)+'T00:00:00':raw));
- return Number.isNaN(d.getTime())?String(row.arrival||raw):arrivalFmt.format(d);
+ const raw=String(row?.arrival||row?.arrivalDate||'').trim(); if(!raw)return '—';
+ const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+ if(m){const d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3]));return arrivalFmt.format(d)}
+ const mdy=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+ if(mdy){let y=+mdy[3];if(y<100)y+=2000;return arrivalFmt.format(new Date(Date.UTC(y,+mdy[1]-1,+mdy[2])))}
+ const d=new Date(raw);
+ return Number.isNaN(d.getTime())?raw:arrivalFmt.format(d);
+}
+function detailField(label,value,cls=''){
+ const missing=value===undefined||value===null||String(value).trim()==='';
+ return `<div class="${missing?'detail-field-missing':''}"><strong>${esc(label)}</strong><span class="${cls}">${missing?'—':esc(value)}</span></div>`;
 }
 function resultFeature(row){
  if(row?.pullApart?.locID&&row?.pullApart?.ticketID&&row?.pullApart?.lineID) return '<span class="vehicle-feature" title="Official Pull-A-Part details and published photo are checked when opened">DETAILS + PHOTO</span>';
@@ -103,7 +111,7 @@ renderAlerts();
 
 async function openDetail(row){
  $('detailModal').hidden=false;
- $('detailContent').innerHTML=`<div class="detail-head"><div><p class="eyebrow">VEHICLE DETAIL</p><h2>${esc(row.year)} ${esc(row.make)} ${esc(row.model)}</h2><p>${esc(row.submodel||'')} ${row.submodel?'· ':''}${esc(row.yard)}</p></div><div class="detail-head-badges">${sourceBadge(row)}${resultFeature(row)}</div></div><div class="detail-layout"><div class="detail-info-panel"><div class="detail-grid"><div><strong>VIN</strong><span class="detail-vin">${esc(row.vin||'Not published')}</span></div><div><strong>Stock</strong><span>${esc(row.stock||'Not published')}</span></div><div><strong>Row</strong><span>${esc(row.row||'Not published')}</span></div><div><strong>Arrival</strong><span>${esc(row.arrival?formatArrival(row):'Not published')}</span></div><div><strong>Body</strong><span>${esc(row.body||'Not published')}</span></div><div><strong>Drive</strong><span>${esc(row.drive||'Not published')}</span></div></div><div id="papExtended" class="source-detail" hidden></div><div class="source-detail provenance-card"><strong>Inventory provenance</strong><span>${esc(row.sourceLabel||row.sourceType||'Unknown')} · ${esc(row.sourceTrust||'MANUAL')}</span>${row.sourceTrust==='FALLBACK'?'<small>Fallback records should be verified with the yard before travel.</small>':''}</div><div class="detail-actions">${row.sourceUrl?`<a class="primary-link" href="${esc(row.sourceUrl)}" target="_blank" rel="noopener">Open source</a>`:''}${row.vin?`<button class="secondary" onclick="decodeDetailVIN('${esc(row.vin)}')">Decode VIN</button>`:''}</div><div id="detailDecode" class="vin-result"></div></div><div class="detail-media-panel"><div id="photoArea" class="photo-area photo-loading"><div class="photo-placeholder">Checking for a published vehicle photo…</div></div></div></div>`;
+ $('detailContent').innerHTML=`<div class="detail-head"><div><p class="eyebrow">VEHICLE DETAIL</p><h2>${esc(row.year)} ${esc(row.make)} ${esc(row.model)}</h2><p>${esc(row.submodel||'')} ${row.submodel?'· ':''}${esc(row.yard)}</p></div><div class="detail-head-badges">${sourceBadge(row)}${resultFeature(row)}</div></div><div class="detail-layout"><div class="detail-info-panel"><div class="detail-grid">${detailField('VIN',row.vin,'detail-vin')}${detailField('Stock',row.stock)}${detailField('Row',row.row)}${detailField('Arrival',row.arrival||row.arrivalDate?formatArrival(row):'')}${detailField('Body',row.body)}${detailField('Drive',row.drive)}</div><div id="papExtended" class="source-detail" hidden></div><div class="source-detail provenance-card"><strong>Inventory provenance</strong><span>${esc(row.sourceLabel||row.sourceType||'Unknown')} · ${esc(row.sourceTrust||'MANUAL')}</span>${row.sourceTrust==='FALLBACK'?'<small>Fallback records should be verified with the yard before travel.</small>':''}</div><div class="detail-actions">${row.sourceUrl?`<a class="primary-link" href="${esc(row.sourceUrl)}" target="_blank" rel="noopener">Open source</a>`:''}${row.vin?`<button class="secondary" onclick="decodeDetailVIN('${esc(row.vin)}')">Decode VIN</button>`:''}</div><div id="detailDecode" class="vin-result"></div></div><div class="detail-media-panel"><div id="photoArea" class="photo-area photo-loading"><div class="photo-placeholder">Checking for a published vehicle photo…</div></div></div></div>`;
  if(row.pullApart?.locID&&row.pullApart?.ticketID&&row.pullApart?.lineID){
   try{
    const q=new URLSearchParams({locID:row.pullApart.locID,ticketID:row.pullApart.ticketID,lineID:row.pullApart.lineID});

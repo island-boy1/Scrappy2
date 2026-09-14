@@ -1,6 +1,6 @@
 const http=require('http'),fs=require('fs'),path=require('path');
 const PORT=process.env.PORT||3000,ROOT=__dirname;
-const BUILD_VERSION='9.6.0';
+const BUILD_VERSION='9.6.1';
 const papDeepDiagnostics=new Map();
 
 const raw=[

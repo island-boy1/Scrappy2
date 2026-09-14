@@ -88,3 +88,10 @@
  .table-card tr.result-row{grid-template-columns:1fr}.table-card tr.result-row td:first-child{grid-column:auto}
  .detail-box{padding:20px 14px}.detail-grid{grid-template-columns:1fr 1fr}.detail-head-badges{align-items:flex-start;margin-top:10px}
 }
+
+/* v9.6.1 focused detail/data corrections */
+.detail-vin{white-space:nowrap;overflow-wrap:normal;word-break:normal;font-size:11px;letter-spacing:-.02em}
+.detail-field-missing{background:#fbfcfc!important;border:1px dashed #e2e7ea;color:#8a949c}
+.detail-field-missing strong{color:#98a1a8!important}
+.detail-field-missing span{font-weight:600!important;color:#a0a8ae}
+@media(max-width:520px){.detail-vin{white-space:normal;overflow-wrap:anywhere}}
