@@ -1,0 +1,41 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Georgia Junkyard Inventory Search</title><link rel="stylesheet" href="/styles.css"></head><body>
+<header class="hero"><div><p class="eyebrow">GEORGIA SALVAGE YARDS</p><h1>Junkyard Inventory Search</h1><p class="subtitle">One search across participating Georgia U-Pull, Pick-Your-Part and salvage-yard inventories.</p></div><div class="status" id="status">Ready</div></header>
+<main class="container">
+<section class="panel interchange-panel"><div class="section-heading"><div><p class="eyebrow">PARTS INTERCHANGE</p><h2>Find compatible donor vehicles</h2><p class="muted">Search by the vehicle you are repairing, then narrow the part and fitment. Pull-A-Part provides the authoritative interchange result; this aggregator can then show matching donor vehicles we have in our Georgia inventory.</p></div><span class="badge">VERIFIED SOURCE: PULL-A-PART</span></div><div class="interchange-grid"><div class="field"><label for="ixLocation">Location</label><select id="ixLocation"><option value="">All Georgia yards</option><option>Atlanta East</option><option>Atlanta North</option><option>Atlanta South</option><option>Augusta</option></select></div><div class="field"><label for="ixMake">Vehicle make</label><input id="ixMake" placeholder="e.g. Volvo"></div><div class="field"><label for="ixModel">Vehicle model</label><input id="ixModel" placeholder="e.g. XC60"></div><div class="field"><label for="ixYear">Vehicle year</label><input id="ixYear" inputmode="numeric" placeholder="e.g. 2018"></div><div class="field"><label for="ixStyle">Style</label><select id="ixStyle"><option value="">Select style</option><option>Sedan</option><option>Coupe</option><option>Convertible</option><option>Hatchback</option><option>Wagon</option><option>SUV</option><option>Pickup</option><option>Van</option></select></div><div class="field"><label for="ixCategory">Part category</label><select id="ixCategory"><option value="">Select category</option><option>Engine</option><option>Transmission</option><option>Electrical</option><option>Cooling</option><option>Steering</option><option>Suspension</option><option>Brakes</option><option>Body</option><option>Interior</option><option>Lighting</option><option>Wheels / Tires</option><option>HVAC</option></select></div><div class="field"><label for="ixPart">Part</label><input id="ixPart" placeholder="e.g. alternator, headlamp"></div><div class="field"><label for="ixFitment">Fitment</label><input id="ixFitment" placeholder="e.g. AWD / left / right"></div></div><div class="interchange-actions"><button id="interchangeBtn">Find interchange</button><button id="candidateBtn" class="secondary">Find donor vehicles in aggregator</button><a class="secondary-link" href="https://www.pullapart.com/inventory/interchangeable-parts/" target="_blank" rel="noopener">Open Pull-A-Part interchange</a></div><div id="interchangeResult" class="interchange-result"></div></section>
+<section class="search-card"><div class="field"><label>Make</label><input id="make" list="makes" placeholder="e.g. Volvo"><datalist id="makes"></datalist></div><div class="field"><label>Model</label><input id="model" placeholder="e.g. XC60"></div><div class="field"><label>Sub model</label><input id="submodel" placeholder="e.g. T5 AWD"></div><div class="field"><label>Year</label><input id="year" inputmode="numeric" placeholder="e.g. 2018"></div><div class="field"><label>Yard</label><select id="yard"><option value="">All yards</option></select></div><div class="checks"><label><input type="checkbox" id="newOnly"> New arrivals (14 days)</label><label><input type="checkbox" id="liveOnly"> Live inventory sources only</label></div><div class="actions"><button id="searchBtn">Search inventory</button><button id="clearBtn" class="secondary">Clear</button></div></section>
+<section class="stats"><div><strong id="resultCount">0</strong><span>vehicles</span></div><div><strong id="yardCount">0</strong><span>yards</span></div><div><strong id="liveCount">0</strong><span>live sources</span></div><div><strong id="lastRefresh">—</strong><span>last refresh</span></div></section>
+<section class="table-card"><div class="table-wrap"><table><thead><tr><th>Yard</th><th>Year</th><th>Make</th><th>Model</th><th>Sub model / Trim</th><th>Body</th><th>Row</th><th>VIN / Stock</th><th>Arrival</th><th>Source</th><th>Details</th></tr></thead><tbody id="results"></tbody></table></div><div id="empty" class="empty"><h2>Search the inventory</h2><p>Enter any combination of make, model, sub model, year and yard.</p></div></section>
+<div class="grid2"><section class="panel"><div class="section-heading"><div><p class="eyebrow">LOCATION VIEW</p><h2>Yards in your results</h2></div></div><div id="mapList" class="map-list"></div></section><section class="panel"><div class="section-heading"><div><p class="eyebrow">ALERTS</p><h2>Saved searches</h2></div></div><p class="muted">Save your current search. Alerts are stored locally in this browser.</p><button id="saveAlert">Save current search</button><div id="alertMsg" class="success"></div><div id="alerts" class="alerts"></div></section></div>
+<section class="panel"><div class="section-heading"><div><p class="eyebrow">VIN TOOL</p><h2>Decode a VIN</h2></div></div><div class="vin-row"><input id="vin" placeholder="Enter 17-character VIN"><button id="decodeBtn">Decode VIN</button></div><div id="vinResult" class="vin-result">NHTSA VIN decoding is optional and uses the public vPIC service.</div></section>
+<section class="detail-modal" id="detailModal" hidden><div class="detail-box"><button class="modal-close" id="modalClose">×</button><div id="detailContent"></div></div></section>
+
+    <section class="connector-card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">CONNECTOR HEALTH</p>
+          <h2>Connector Status</h2>
+        </div>
+        <button id="connectorRefreshBtn" class="secondary">Refresh status</button>
+      </div>
+      <div class="connector-summary">
+        <div><strong id="liveConnectorCount">0</strong><span>live</span></div>
+        <div><strong id="emptyConnectorCount">0</strong><span>empty</span></div>
+        <div><strong id="searchDrivenConnectorCount">0</strong><span>search-driven</span></div><div><strong id="fallbackConnectorCount">0</strong><span>fallback review</span></div>
+        <div><strong id="errorConnectorCount">0</strong><span>errors</span></div>
+        <div><strong id="directConnectorCount">0</strong><span>direct link only</span></div><div><strong id="warningConnectorCount">0</strong><span>quality warnings</span></div>
+      </div>
+      <div class="table-wrap">
+        <table class="connector-table">
+          <thead>
+            <tr>
+              <th>Yard</th><th>Status</th><th>Source</th><th>Vehicles</th><th>VIN</th><th>Row</th><th>Arrival</th><th>Quality</th><th>Response</th><th>Last success</th>
+            </tr>
+          </thead>
+          <tbody id="connectorResults"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="yard-card"><div class="section-heading"><div><p class="eyebrow">PARTICIPATING YARDS</p><h2>Georgia yard directory</h2></div><button id="refreshBtn" class="secondary">Refresh live inventory</button></div><div id="yards" class="yards"></div></section>
+<p class="note">Only publicly accessible inventory sources are used. SEARCH-DRIVEN means the connector runs on demand after a make + model search; FALLBACK REVIEW inventory remains visible but is excluded by the Live inventory sources only filter and should be verified before travel. A yard is marked LIVE CONNECTOR only after a public inventory source has been configured. The app does not bypass authentication, CAPTCHAs, rate limits or access controls.</p>
+</main><script src="/app.js"></script></body></html>
