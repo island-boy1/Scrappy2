@@ -1,6 +1,6 @@
 const http=require('http'),fs=require('fs'),path=require('path');
 const PORT=process.env.PORT||3000,ROOT=__dirname;
-const BUILD_VERSION='9.5.7';
+const BUILD_VERSION='9.5.8';
 const papDeepDiagnostics=new Map();
 
 const raw=[
@@ -178,7 +178,7 @@ function papYardId(v){
  return null;
 }
 function papTelemetryBase(query,started){
- return {attemptedAt:new Date().toISOString(),query,vehicleCount:0,responseMs:Date.now()-started,error:'',stage:'STARTED',endpoint:'AdvancedVehicleSearch',makeId:null,modelKey:papModelKey(query.split(/\s+/).slice(1).join(' ')),attempts:0,successfulResponses:0,httpErrors:0,timeouts:0,transportErrors:0,rawRecords:0,targetMakeRecords:0,targetModelRecords:0,georgiaModelRecords:0,diagnostic:'',idsTried:[],responseSamples:[],modelsSeen:[],locationsSeen:[]};
+ return {attemptedAt:new Date().toISOString(),query,vehicleCount:0,responseMs:Date.now()-started,error:'',stage:'STARTED',endpoint:'/Vehicle/Search',makeId:null,modelKey:papModelKey(query.split(/\s+/).slice(1).join(' ')),attempts:0,successfulResponses:0,httpErrors:0,timeouts:0,transportErrors:0,rawRecords:0,targetMakeRecords:0,targetModelRecords:0,georgiaModelRecords:0,diagnostic:'',idsTried:[],responseSamples:[],modelsSeen:[],locationsSeen:[]};
 }
 function setPapTelemetry(yardIds,base,rows=[]){
  for(const yardId of yardIds){
@@ -201,7 +201,7 @@ async function papPost(endpoint,headers,body,timeoutMs=6500){
 async function pullApartSiteDiscovery(){
  const started=Date.now();
  const pages=['https://www.pullapart.com/used-auto-parts/search-car-inventory/','https://www.pullapart.com/inventory-v2/','https://www.pullapart.com/inventory-v2/search/'];
- const headers={'user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.7','accept':'text/html,application/xhtml+xml,application/javascript,text/javascript,*/*'};
+ const headers={'user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.8','accept':'text/html,application/xhtml+xml,application/javascript,text/javascript,*/*'};
  const out={version:BUILD_VERSION,generatedAt:new Date().toISOString(),pages:[],scripts:[],candidates:[],errors:[],responseMs:0};
  const seenScripts=new Set(), candidateSet=new Set();
  const addCandidate=(value,source)=>{if(!value)return; const v=String(value).replace(/&amp;/g,'&').trim(); if(v.length<4||v.length>500)return; const key=v+'|'+source; if(candidateSet.has(key))return; candidateSet.add(key); out.candidates.push({value:v,source});};
@@ -242,113 +242,123 @@ async function pullApartSiteDiscovery(){
  return out;
 }
 
+const PAP_INVENTORY_BASE='https://inventoryservice.pullapart.com';
+const PAP_GA_LOCATIONS=[21,4,3,9];
+let papMakeCatalogCache={at:0,rows:[]};
+const papModelCatalogCache=new Map();
+
+async function papGetJson(pathname,timeoutMs=6500){
+ const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
+ try{
+  const r=await fetch(PAP_INVENTORY_BASE+pathname,{headers:{'accept':'application/json','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.8'},signal:ctrl.signal});
+  const text=await r.text(); let json=null; try{json=JSON.parse(text)}catch{}
+  if(!r.ok) throw Error(`Pull-A-Part ${pathname} returned HTTP ${r.status}`);
+  if(json===null) throw Error(`Pull-A-Part ${pathname} did not return JSON`);
+  return json;
+ }finally{clearTimeout(timer)}
+}
+async function getPapMakeCatalog(force=false){
+ if(!force && papMakeCatalogCache.rows.length && Date.now()-papMakeCatalogCache.at<6*60*60*1000) return papMakeCatalogCache.rows;
+ const rows=await papGetJson('/Make/');
+ const arr=Array.isArray(rows)?rows:[];
+ papMakeCatalogCache={at:Date.now(),rows:arr};
+ for(const x of arr){const name=canonicalMake(x.makeName),id=Number(x.makeID);if(name&&id){pullApartCatalog.makes.set(name,id);pullApartMakeIdCache.set(name,id)}}
+ if(arr.length) savePapMakeCache();
+ pullApartCatalog.lastUpdated=new Date().toISOString();
+ return arr;
+}
+async function getPapModelCatalog(makeId,makeName='',force=false){
+ const key=Number(makeId); const cached=papModelCatalogCache.get(key);
+ if(!force && cached?.rows?.length && Date.now()-cached.at<6*60*60*1000) return cached.rows;
+ const rows=await papGetJson(`/Model?makeID=${encodeURIComponent(key)}`);
+ const arr=Array.isArray(rows)?rows:[]; papModelCatalogCache.set(key,{at:Date.now(),rows:arr});
+ const make=canonicalMake(makeName);
+ if(make){
+  const m=new Map();
+  for(const x of arr){const name=String(x.modelName||'').trim(),id=Number(x.modelID)||null,k=papModelKey(name);if(k&&name)m.set(k,{name,id})}
+  pullApartCatalog.models.set(make,m);
+ }
+ pullApartCatalog.lastUpdated=new Date().toISOString();
+ return arr;
+}
+async function papLiveModelCatalogAssessment(make,model){
+ const targetMake=canonicalMake(make), targetModelKey=papModelKey(model);
+ const makes=await getPapMakeCatalog();
+ const makeRow=makes.find(x=>canonicalMake(x.makeName)===targetMake)||null;
+ if(!makeRow) return {make:targetMake,makeId:null,source:'official-current-catalog',complete:true,status:'MAKE_NOT_FOUND',models:[],requestedModel:String(model||''),requestedModelKey:targetModelKey,requestedModelObserved:false,requestedModelId:null};
+ const models=await getPapModelCatalog(makeRow.makeID,targetMake);
+ const normalized=models.map(x=>({name:String(x.modelName||''),id:Number(x.modelID)||null,showWebsite:x.showWebsite!==false})).filter(x=>x.name).sort((a,b)=>a.name.localeCompare(b.name));
+ const hit=normalized.find(x=>papModelKey(x.name)===targetModelKey)||null;
+ return {make:targetMake,makeId:Number(makeRow.makeID),source:'official-current-catalog',complete:true,status:hit?'MODEL_FOUND':'MODEL_NOT_FOUND',models:normalized,requestedModel:String(model||''),requestedModelKey:targetModelKey,requestedModelObserved:!!hit,requestedModelId:hit?.id||null};
+}
+
 async function fetchPullApartSearch(make,model){
  if(!make||!model) return [];
  const yardIds=['pull-apart-atl-east','pull-apart-atl-north','pull-apart-atl-south','pull-apart-augusta'];
- const endpoint='https://externalinterchangeservice.pullapart.com/interchange/AdvancedVehicleSearch/';
- const locations=[19,27,14,6,13,22,17,8,12,10,15,18,29,30,20,11,7,24,5,16,9,4,3,21,25];
- const headers={'accept':'application/json, text/plain, */*','content-type':'application/json;charset=UTF-8','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.7'};
- const targetMake=canonicalMake(make), targetModel=canonicalModel(model);
+ const endpoint=PAP_INVENTORY_BASE+'/Vehicle/Search';
+ const headers={'accept':'application/json','content-type':'application/json','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.8'};
+ const targetMake=canonicalMake(make), targetModel=canonicalModel(model), targetModelKey=papModelKey(model);
  const started=Date.now(), query=[make,model].filter(Boolean).join(' ');
- let t=papTelemetryBase(query,started); t.version='9.5.6'; t.catalogSource=''; t.cacheHit=false;
- const rawData=[];
-
- async function runMakeId(makeId,timeoutMs=5000){
-  t.attempts++; t.idsTried.push(makeId);
-  try{
-   const res=await papPost(endpoint,headers,{Locations:locations,Make:makeId,Models:['-1'],Years:['-1']},timeoutMs);
-   if(t.responseSamples.length<10) t.responseSamples.push({makeId,status:res.status,ok:res.ok,contentType:res.contentType,bodyBytes:res.bodyBytes,preview:res.text});
-   if(!res.ok){t.httpErrors++; return {makeId,rows:[],status:res.status};}
-   t.successfulResponses++;
-   const rows=Array.isArray(res.json)?res.json:[];
-   t.rawRecords+=rows.length; rememberPapRows(rows);
-   return {makeId,rows,status:res.status};
-  }catch(e){
-   if(e?.name==='AbortError') t.timeouts++; else t.transportErrors++;
-   return {makeId,rows:[],error:e?.message||String(e)};
-  }
- }
-
+ let t=papTelemetryBase(query,started); t.version=BUILD_VERSION; t.endpoint='/Vehicle/Search'; t.apiBase=PAP_INVENTORY_BASE; t.locationIds=[...PAP_GA_LOCATIONS]; t.catalogSource='official-current-catalog'; t.catalogRequests=0;
  try{
-  let makeId=pullApartMakeIdCache.get(targetMake)||pullApartCatalog.makes.get(targetMake)||null;
-  if(makeId){
-   t.stage='CACHED_MAKE_ID'; t.makeId=makeId; t.cacheHit=true; t.catalogSource='persistent-cache';
-   const r=await runMakeId(makeId,6500);
-   const targetRows=r.rows.filter(v=>canonicalMake(v.makeName)===targetMake);
-   if(targetRows.length){rawData.push(...r.rows)}
-   else {pullApartMakeIdCache.delete(targetMake);savePapMakeCache();makeId=null;t.cacheHit=false;}
+  t.stage='RESOLVE_MAKE'; t.catalogRequests++;
+  const makes=await getPapMakeCatalog();
+  const makeRow=makes.find(x=>canonicalMake(x.makeName)===targetMake)||null;
+  if(!makeRow){
+   t.stage='MAKE_NOT_FOUND'; t.responseMs=Date.now()-started; t.diagnostic=`${targetMake} was not found in Pull-A-Part's current /Make/ catalog.`;
+   setPapTelemetry(yardIds,t,[]); papDeepDiagnostics.set(query,{...t,rowsByYard:Object.fromEntries(yardIds.map(id=>[id,0]))}); return [];
   }
+  const makeId=Number(makeRow.makeID); t.makeId=makeId; pullApartMakeIdCache.set(targetMake,makeId); savePapMakeCache();
 
-  // Try special catalog-style requests before scanning numeric IDs. Some deployments
-  // return a mixed catalog for Make 0/-1; when they do, learn every make in one request.
-  if(!makeId){
-   t.stage='CATALOG_DISCOVERY';
-   for(const specialId of [0,-1]){
-    const r=await runMakeId(specialId,6500);
-    const hit=r.rows.find(v=>canonicalMake(v.makeName)===targetMake && Number(v.makeID)>0);
-    if(hit){makeId=Number(hit.makeID);pullApartMakeIdCache.set(targetMake,makeId);savePapMakeCache();t.makeId=makeId;t.catalogSource=`special-${specialId}`;rawData.push(...r.rows);break;}
-   }
+  t.stage='RESOLVE_MODEL'; t.catalogRequests++;
+  const models=await getPapModelCatalog(makeId,targetMake);
+  const modelRow=models.find(x=>papModelKey(x.modelName)===targetModelKey)||null;
+  t.modelCatalog={make:targetMake,makeId,source:'official-current-catalog',complete:true,status:modelRow?'MODEL_FOUND':'MODEL_NOT_FOUND',requestedModel:String(model||''),requestedModelKey:targetModelKey,requestedModelObserved:!!modelRow,requestedModelId:modelRow?Number(modelRow.modelID):null,models:models.map(x=>({name:String(x.modelName||''),id:Number(x.modelID)||null})).filter(x=>x.name)};
+  if(!modelRow){
+   t.stage='MODEL_NOT_FOUND'; t.responseMs=Date.now()-started; t.modelsSeen=t.modelCatalog.models.map(x=>x.name).slice(0,150); t.diagnostic=`${targetModel} was not found in Pull-A-Part's current official model catalog for ${targetMake}.`;
+   setPapTelemetry(yardIds,t,[]); papDeepDiagnostics.set(query,{...t,rowsByYard:Object.fromEntries(yardIds.map(id=>[id,0]))}); return [];
   }
-
-  // Final fallback: bounded numeric discovery. Use small batches to avoid the rate-limit/
-  // timeout storm seen in v9.5.4, and persist the first authoritative makeName->makeID hit.
-  if(!makeId){
-   t.stage='DISCOVER_MAKE_ID';
-   const ids=Array.from({length:60},(_,i)=>i+1);
-   const batchSize=4;
-   outer: for(let i=0;i<ids.length;i+=batchSize){
-    const results=await Promise.all(ids.slice(i,i+batchSize).map(id=>runMakeId(id,5000)));
-    for(const r of results){
-     const hit=r.rows.find(v=>canonicalMake(v.makeName)===targetMake);
-     if(hit){
-      makeId=Number(hit.makeID)||r.makeId;
-      pullApartMakeIdCache.set(targetMake,makeId); savePapMakeCache();
-      t.makeId=makeId; t.catalogSource='numeric-discovery'; rawData.push(...r.rows); break outer;
-     }
-    }
-    if(t.timeouts>=12 && t.successfulResponses===0) break;
-   }
+  const modelId=Number(modelRow.modelID); t.modelId=modelId; t.stage='VEHICLE_SEARCH'; t.attempts=1;
+  const res=await papPost(endpoint,headers,{Locations:PAP_GA_LOCATIONS,MakeID:makeId,Models:[modelId],Years:[]},8000);
+  t.responseSamples=[{status:res.status,ok:res.ok,contentType:res.contentType,bodyBytes:res.bodyBytes,preview:res.text}];
+  if(!res.ok){t.httpErrors=1;throw Error(`Pull-A-Part /Vehicle/Search returned HTTP ${res.status}`)}
+  t.successfulResponses=1;
+  const groups=Array.isArray(res.json)?res.json:[];
+  const raw=[];
+  for(const group of groups){
+   const locationID=Number(group?.locationID)||0;
+   for(const bucket of ['exact','other']) for(const v of (Array.isArray(group?.[bucket])?group[bucket]:[])) raw.push({...v,_bucket:bucket,locationID:v.locationID||locationID});
   }
-
-  // If discovery learned the ID from a mixed catalog response, make one clean make-specific
-  // request so model/location filtering is based on authoritative rows for that make.
-  if(makeId && !rawData.some(v=>canonicalMake(v.makeName)===targetMake)){
-   const r=await runMakeId(makeId,6500); rawData.push(...r.rows);
-  }
-
-  const makeRows=rawData.filter(v=>canonicalMake(v.makeName)===targetMake);
-  const modelRows=makeRows.filter(v=>papModelMatches(v.modelName,targetModel));
-  t.targetMakeRecords=makeRows.length;
-  t.targetModelRecords=modelRows.length;
-  t.modelsSeen=[...new Set(makeRows.map(v=>String(v.modelName||'').trim()).filter(Boolean))].sort().slice(0,150);
-  t.modelCatalog=papModelCatalogAssessment(targetMake,targetModel);
-  t.locationsSeen=[...new Set(rawData.map(v=>`${v.locationID||''}:${v.locationName||pullApartCatalog.locations.get(Number(v.locationID))||''}`).filter(x=>x!==':'))].sort().slice(0,150);
+  t.rawRecords=raw.length;
+  const makeRows=raw.filter(v=>canonicalMake(v.makeName)===targetMake);
+  const modelRows=makeRows.filter(v=>papModelKey(v.modelName)===targetModelKey);
+  t.targetMakeRecords=makeRows.length; t.targetModelRecords=modelRows.length;
+  t.modelsSeen=[...new Set(makeRows.map(v=>String(v.modelName||'').trim()).filter(Boolean))].sort();
+  t.locationsSeen=[...new Set(groups.map(g=>String(g?.locationID||'')).filter(Boolean))].sort();
+  rememberPapRows(modelRows.map(v=>({...v,locationName:v.locName||v.locationName,locationID:v.locID||v.locationID})));
   const out=[];
   for(const v of modelRows){
-   const yardId=papYardId(v); if(!yardId) continue;
+   const normalized={...v,locationName:v.locName||v.locationName,locationID:v.locID||v.locationID};
+   const yardId=papYardId(normalized); if(!yardId) continue;
    const y=YARDS.find(x=>x.id===yardId); if(!y) continue;
-   const vi=parsePapVinInfo(v.vinInformation);
    const arrival=v.dateYardOn?String(v.dateYardOn).split('T')[0]:'';
    let ad=null; if(arrival){try{ad=new Date(arrival+'T00:00:00').toISOString()}catch{}}
-   out.push({yardId,yard:y.name,year:Number(v.modelYear)||'',make:v.makeName||targetMake,model:v.modelName||targetModel,submodel:vi.trim||vi.series||'',row:v.row||'',vin:vi.vinNumber||vi.vin||'',stock:String(v.idNumber||''),arrival,arrivalDate:ad,sourceUrl:y.website,diy:true,live:true,isNew:ad?isRecent(ad):false,body:vi.bodyType||vi.bodyClass||'',drive:vi.driveType||'',sourceType:'official-api'});
+   out.push({yardId,yard:y.name,year:Number(v.modelYear)||'',make:v.makeName||targetMake,model:v.modelName||targetModel,submodel:'',row:v.row||'',vin:v.vin||'',stock:'',arrival,arrivalDate:ad,sourceUrl:y.website,diy:true,live:true,isNew:ad?isRecent(ad):false,body:'',drive:'',sourceType:'official-api',pullApart:{vinID:v.vinID||null,ticketID:v.ticketID||null,lineID:v.lineID||null,locID:v.locID||v.locationID||null,modelID:v.modelID||modelId,matchBucket:v._bucket}});
   }
-  const rows=dedupeInventory(out); t.georgiaModelRecords=rows.length; t.responseMs=Date.now()-started;
-  if(rows.length){t.stage='PARSED_RESULTS';t.diagnostic=`Official Pull-A-Part results parsed for ${targetMake} ${targetModel}; ${rows.length} Georgia vehicle(s) mapped.`}
-  else if(!t.makeId){t.stage=t.timeouts?'MAKE_DISCOVERY_INCOMPLETE':'MAKE_NOT_FOUND';t.diagnostic=t.timeouts?`Could not finish make discovery for ${targetMake} because the legacy service timed out. No stale make ID was cached.`:`No Pull-A-Part make ID could be resolved for ${targetMake}.`}
-  else if(!makeRows.length){t.stage='MAKE_MAPPING_REJECTED';t.diagnostic=`Resolved make ID ${t.makeId} did not return authoritative ${targetMake} rows; the mapping was discarded.`;pullApartMakeIdCache.delete(targetMake);savePapMakeCache();}
-  else if(!modelRows.length){t.stage='MODEL_NOT_IN_RETURNED_INVENTORY';t.diagnostic=`Pull-A-Part returned ${makeRows.length} ${targetMake} record(s), but none matched ${targetModel}. Observed models in the returned inventory: ${t.modelsSeen.join(', ')||'none'}. This does not prove ${targetModel} is absent from Pull-A-Part's master model catalog.`}
-  else {t.stage='LOCATION_MAPPING_ZERO';t.diagnostic=`${modelRows.length} ${targetMake} ${targetModel} record(s) were returned, but none mapped to Atlanta East/North/South/Augusta. Inspect locationsSeen.`}
-  t.learnedMakeId=pullApartMakeIdCache.get(targetMake)||null;
-  t.persistedMakeCount=pullApartMakeIdCache.size;
+  const rows=dedupeInventory(out); t.georgiaModelRecords=rows.length; t.vehicleCount=rows.length; t.responseMs=Date.now()-started;
+  t.stage=rows.length?'PARSED_RESULTS':'NO_GEORGIA_RESULTS';
+  t.diagnostic=rows.length?`Current Pull-A-Part /Vehicle/Search returned ${rows.length} Georgia ${targetMake} ${targetModel} vehicle(s).`:`Pull-A-Part's current /Vehicle/Search returned no Georgia ${targetMake} ${targetModel} vehicles.`;
   setPapTelemetry(yardIds,t,rows);
-  papDeepDiagnostics.set(query,{...t,rowsByYard:Object.fromEntries(yardIds.map(id=>[id,rows.filter(r=>r.yardId===id).length])),makeCache:Object.fromEntries([...pullApartMakeIdCache.entries()].sort())});
+  papDeepDiagnostics.set(query,{...t,rowsByYard:Object.fromEntries(yardIds.map(id=>[id,rows.filter(r=>r.yardId===id).length]))});
   return rows;
  }catch(e){
-  t={...t,responseMs:Date.now()-started,error:e?.message||String(e),stage:'CONNECTOR_ERROR',diagnostic:'Unexpected Pull-A-Part connector failure.'};
-  setPapTelemetry(yardIds,t,[]); papDeepDiagnostics.set(query,{...t,rowsByYard:Object.fromEntries(yardIds.map(id=>[id,0])),makeCache:Object.fromEntries([...pullApartMakeIdCache.entries()].sort())});
-  console.error('Pull-A-Part on-demand connector failed:',e.message); return [];
+  if(e?.name==='AbortError') t.timeouts=(t.timeouts||0)+1; else t.transportErrors=(t.transportErrors||0)+1;
+  t={...t,responseMs:Date.now()-started,error:e?.message||String(e),stage:'CONNECTOR_ERROR',diagnostic:'Current Pull-A-Part Inventory Service request failed.'};
+  setPapTelemetry(yardIds,t,[]); papDeepDiagnostics.set(query,{...t,rowsByYard:Object.fromEntries(yardIds.map(id=>[id,0]))});
+  console.error('Pull-A-Part current Inventory Service connector failed:',e.message); return [];
  }
 }
+
 async function fetchFenixMoultrie(){
  const url='https://fenixupull.com/recent-inventory/';
  try{
@@ -601,8 +611,14 @@ const server=http.createServer(async(req,res)=>{try{
   const u=new URL(req.url,'http://localhost');
   const make=u.searchParams.get('make')||'';
   const model=u.searchParams.get('model')||'';
-  res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
-  return res.end(JSON.stringify({version:BUILD_VERSION,generatedAt:new Date().toISOString(),catalog:papModelCatalogAssessment(make,model),note:'v9.5.6 deliberately distinguishes observed official inventory models from a complete master model catalog. A model not observed here is not declared invalid.'},null,2));
+  try{
+   const catalog=await papLiveModelCatalogAssessment(make,model);
+   res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
+   return res.end(JSON.stringify({version:BUILD_VERSION,generatedAt:new Date().toISOString(),catalog,note:'v9.5.8 uses Pull-A-Part current official /Make/ and /Model catalogs; model IDs are retrieved from the live Inventory Service and are not guessed.'},null,2));
+  }catch(e){
+   res.writeHead(502,{'Content-Type':'application/json','Cache-Control':'no-store'});
+   return res.end(JSON.stringify({version:BUILD_VERSION,error:e?.message||String(e)}));
+  }
  }
  if(req.url==='/api/pullapart-diagnostics'){
   res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
