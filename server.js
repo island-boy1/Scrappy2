@@ -1,6 +1,6 @@
 const http=require('http'),fs=require('fs'),path=require('path');
 const PORT=process.env.PORT||3000,ROOT=__dirname;
-const BUILD_VERSION='9.5.8';
+const BUILD_VERSION='9.5.9';
 const papDeepDiagnostics=new Map();
 
 const raw=[
@@ -201,7 +201,7 @@ async function papPost(endpoint,headers,body,timeoutMs=6500){
 async function pullApartSiteDiscovery(){
  const started=Date.now();
  const pages=['https://www.pullapart.com/used-auto-parts/search-car-inventory/','https://www.pullapart.com/inventory-v2/','https://www.pullapart.com/inventory-v2/search/'];
- const headers={'user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.8','accept':'text/html,application/xhtml+xml,application/javascript,text/javascript,*/*'};
+ const headers={'user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.9','accept':'text/html,application/xhtml+xml,application/javascript,text/javascript,*/*'};
  const out={version:BUILD_VERSION,generatedAt:new Date().toISOString(),pages:[],scripts:[],candidates:[],errors:[],responseMs:0};
  const seenScripts=new Set(), candidateSet=new Set();
  const addCandidate=(value,source)=>{if(!value)return; const v=String(value).replace(/&amp;/g,'&').trim(); if(v.length<4||v.length>500)return; const key=v+'|'+source; if(candidateSet.has(key))return; candidateSet.add(key); out.candidates.push({value:v,source});};
@@ -250,13 +250,35 @@ const papModelCatalogCache=new Map();
 async function papGetJson(pathname,timeoutMs=6500){
  const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
  try{
-  const r=await fetch(PAP_INVENTORY_BASE+pathname,{headers:{'accept':'application/json','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.8'},signal:ctrl.signal});
+  const r=await fetch(PAP_INVENTORY_BASE+pathname,{headers:{'accept':'application/json','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.9'},signal:ctrl.signal});
   const text=await r.text(); let json=null; try{json=JSON.parse(text)}catch{}
   if(!r.ok) throw Error(`Pull-A-Part ${pathname} returned HTTP ${r.status}`);
   if(json===null) throw Error(`Pull-A-Part ${pathname} did not return JSON`);
   return json;
  }finally{clearTimeout(timer)}
 }
+async function papVehicleDetails(locID,ticketID,lineID){
+ const ids=[locID,ticketID,lineID].map(Number);
+ if(ids.some(x=>!Number.isFinite(x)||x<=0)) throw Error('Invalid Pull-A-Part vehicle identifiers');
+ const [extended,image] = await Promise.allSettled([
+  papGetJson(`/VehicleExtendedInfo/${ids[0]}/${ids[1]}/${ids[2]}`,6500),
+  (async()=>{
+   const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),5500);
+   try{
+    const q=new URLSearchParams({locID:String(ids[0]),ticketID:String(ids[1]),lineID:String(ids[2]),programID:'35',imageIndex:'1'});
+    const r=await fetch('https://imageservice.pullapart.com/img/retrieveimage/?'+q.toString(),{headers:{'accept':'application/json','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.9'},signal:ctrl.signal});
+    const text=await r.text(); let json=null; try{json=JSON.parse(text)}catch{}
+    if(!r.ok) throw Error(`Pull-A-Part image service returned HTTP ${r.status}`);
+    return json;
+   } finally {clearTimeout(timer)}
+  })()
+ ]);
+ const ext=extended.status==='fulfilled'?extended.value:null;
+ const img=image.status==='fulfilled'?image.value:null;
+ const imageUrl=(img&&typeof img==='object'&&(img.webPath||img.WebPath||img.url||img.imageUrl))||null;
+ return {extendedInfo:ext,image:imageUrl&&String(imageUrl).toLowerCase().includes('error retrieving image')?null:imageUrl,extendedInfoError:extended.status==='rejected'?extended.reason?.message||String(extended.reason):null,imageError:image.status==='rejected'?image.reason?.message||String(image.reason):null};
+}
+
 async function getPapMakeCatalog(force=false){
  if(!force && papMakeCatalogCache.rows.length && Date.now()-papMakeCatalogCache.at<6*60*60*1000) return papMakeCatalogCache.rows;
  const rows=await papGetJson('/Make/');
@@ -296,7 +318,7 @@ async function fetchPullApartSearch(make,model){
  if(!make||!model) return [];
  const yardIds=['pull-apart-atl-east','pull-apart-atl-north','pull-apart-atl-south','pull-apart-augusta'];
  const endpoint=PAP_INVENTORY_BASE+'/Vehicle/Search';
- const headers={'accept':'application/json','content-type':'application/json','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.8'};
+ const headers={'accept':'application/json','content-type':'application/json','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.9'};
  const targetMake=canonicalMake(make), targetModel=canonicalModel(model), targetModelKey=papModelKey(model);
  const started=Date.now(), query=[make,model].filter(Boolean).join(' ');
  let t=papTelemetryBase(query,started); t.version=BUILD_VERSION; t.endpoint='/Vehicle/Search'; t.apiBase=PAP_INVENTORY_BASE; t.locationIds=[...PAP_GA_LOCATIONS]; t.catalogSource='official-current-catalog'; t.catalogRequests=0;
@@ -614,7 +636,7 @@ const server=http.createServer(async(req,res)=>{try{
   try{
    const catalog=await papLiveModelCatalogAssessment(make,model);
    res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
-   return res.end(JSON.stringify({version:BUILD_VERSION,generatedAt:new Date().toISOString(),catalog,note:'v9.5.8 uses Pull-A-Part current official /Make/ and /Model catalogs; model IDs are retrieved from the live Inventory Service and are not guessed.'},null,2));
+   return res.end(JSON.stringify({version:BUILD_VERSION,generatedAt:new Date().toISOString(),catalog,note:'v9.5.9 uses Pull-A-Part current official /Make/ and /Model catalogs; model IDs are retrieved from the live Inventory Service and are not guessed.'},null,2));
   }catch(e){
    res.writeHead(502,{'Content-Type':'application/json','Cache-Control':'no-store'});
    return res.end(JSON.stringify({version:BUILD_VERSION,error:e?.message||String(e)}));
@@ -628,6 +650,15 @@ const server=http.createServer(async(req,res)=>{try{
   const statuses=await getConnectorStatuses();
   res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
   return res.end(JSON.stringify({generatedAt:new Date().toISOString(),statuses}));
+ }
+ if(req.url.startsWith('/api/pullapart-vehicle')){
+  const u=new URL(req.url,'http://localhost');
+  const locID=u.searchParams.get('locID'), ticketID=u.searchParams.get('ticketID'), lineID=u.searchParams.get('lineID');
+  try{
+   const details=await papVehicleDetails(locID,ticketID,lineID);
+   res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'public,max-age=300'});
+   return res.end(JSON.stringify({version:BUILD_VERSION,...details}));
+  }catch(e){res.writeHead(400,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify({version:BUILD_VERSION,error:e?.message||String(e)}))}
  }
  if(req.url.startsWith('/api/vin/')){const vin=decodeURIComponent(req.url.slice(9));const r=await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/'+encodeURIComponent(vin)+'?format=json');res.writeHead(r.status,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(await r.text())}
  if(req.url.startsWith('/api/vehicle')){
