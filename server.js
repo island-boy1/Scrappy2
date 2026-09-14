@@ -1,6 +1,6 @@
 const http=require('http'),fs=require('fs'),path=require('path');
 const PORT=process.env.PORT||3000,ROOT=__dirname;
-const BUILD_VERSION='9.5.5';
+const BUILD_VERSION='9.5.7';
 const papDeepDiagnostics=new Map();
 
 const raw=[
@@ -150,6 +150,25 @@ function rememberPapRows(rows){
  }
  pullApartCatalog.lastUpdated=new Date().toISOString();
 }
+function papObservedModelCatalog(make){
+ const key=canonicalMake(make);
+ const m=pullApartCatalog.models.get(key);
+ const models=m?[...m.values()].sort((a,b)=>String(a.name).localeCompare(String(b.name))):[];
+ return {
+  make:key,
+  makeId:pullApartCatalog.makes.get(key)||pullApartMakeIdCache.get(key)||null,
+  source:'observed-official-inventory',
+  complete:false,
+  status:'OBSERVED_ONLY',
+  explanation:'These models were learned from authoritative Pull-A-Part vehicle rows. They are not treated as a complete master model list.',
+  models
+ };
+}
+function papModelCatalogAssessment(make,model){
+ const cat=papObservedModelCatalog(make), wanted=papModelKey(model);
+ const hit=cat.models.find(x=>papModelKey(x.name)===wanted)||null;
+ return {...cat,requestedModel:String(model||''),requestedModelKey:wanted,requestedModelObserved:!!hit,requestedModelId:hit?.id||null};
+}
 function papYardId(v){
  const loc=String(v.locationName||pullApartCatalog.locations.get(Number(v.locationID))||'').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim();
  if(loc.includes('ATLANTA EAST')) return 'pull-apart-atl-east';
@@ -177,15 +196,61 @@ async function papPost(endpoint,headers,body,timeoutMs=6500){
  }finally{clearTimeout(timer)}
 }
 
+
+
+async function pullApartSiteDiscovery(){
+ const started=Date.now();
+ const pages=['https://www.pullapart.com/used-auto-parts/search-car-inventory/','https://www.pullapart.com/inventory-v2/','https://www.pullapart.com/inventory-v2/search/'];
+ const headers={'user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.7','accept':'text/html,application/xhtml+xml,application/javascript,text/javascript,*/*'};
+ const out={version:BUILD_VERSION,generatedAt:new Date().toISOString(),pages:[],scripts:[],candidates:[],errors:[],responseMs:0};
+ const seenScripts=new Set(), candidateSet=new Set();
+ const addCandidate=(value,source)=>{if(!value)return; const v=String(value).replace(/&amp;/g,'&').trim(); if(v.length<4||v.length>500)return; const key=v+'|'+source; if(candidateSet.has(key))return; candidateSet.add(key); out.candidates.push({value:v,source});};
+ const scan=(text,source)=>{
+   const patterns=[
+    /https?:\\?\\?\/\/[^"'`\\s<>]+/gi,
+    /(?:https?:)?\/\/[^"'`\\s<>]+/gi,
+    /["'`](\/?[^"'`\\s<>]*(?:api|inventory|vehicle|search|interchange|model|make)[^"'`\\s<>]*)["'`]/gi,
+    /(?:AdvancedVehicleSearch|BasicVehicleSearch|VehicleSearch|GetModels|GetMakes|GetInventory|InventorySearch)[^"'`\\s<>]*/gi
+   ];
+   for(const p of patterns){let m;let count=0;while((m=p.exec(text))&&count<250){const v=m[1]||m[0]; if(/pullapart|inventory|vehicle|interchange|api|model|make|search/i.test(v)) addCandidate(v,source); count++;}}
+ };
+ for(const page of pages){
+  try{
+   const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),10000);
+   const r=await fetch(page,{headers,signal:ctrl.signal}); const html=await r.text(); clearTimeout(timer);
+   out.pages.push({url:page,status:r.status,ok:r.ok,bytes:Buffer.byteLength(html||'','utf8')}); scan(html,page);
+   const rx=/<script[^>]+src=["']([^"']+)["'][^>]*>/gi; let m;
+   while((m=rx.exec(html))){try{const u=new URL(m[1],page).href; if(!seenScripts.has(u)){seenScripts.add(u);out.scripts.push({url:u,status:null,bytes:0})}}catch{}}
+  }catch(e){out.errors.push({source:page,error:e?.message||String(e)})}
+ }
+ // Inspect a bounded number of first-party scripts. This runs from the user's Codespace,
+ // which sees the same public site resources as the app connector.
+ let inspected=0;
+ for(const item of out.scripts){
+  if(inspected>=30) break;
+  try{
+   const u=new URL(item.url); if(!/pullapart\.com$/i.test(u.hostname)&&!/\.pullapart\.com$/i.test(u.hostname)) continue;
+   const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),10000);
+   const r=await fetch(item.url,{headers,signal:ctrl.signal}); const js=await r.text(); clearTimeout(timer);
+   item.status=r.status; item.bytes=Buffer.byteLength(js||'','utf8'); inspected++; scan(js,item.url);
+  }catch(e){item.error=e?.message||String(e)}
+ }
+ out.scriptsInspected=inspected;
+ out.candidates=out.candidates.filter(x=>/pullapart|externalinterchange|inventory|vehicle|interchange|api|model|make|search/i.test(x.value)).slice(0,500);
+ out.responseMs=Date.now()-started;
+ out.note='Discovery only: this endpoint inventories the current Pull-A-Part site pages/scripts so we can identify the same live search service used by their website before replacing the legacy connector.';
+ return out;
+}
+
 async function fetchPullApartSearch(make,model){
  if(!make||!model) return [];
  const yardIds=['pull-apart-atl-east','pull-apart-atl-north','pull-apart-atl-south','pull-apart-augusta'];
  const endpoint='https://externalinterchangeservice.pullapart.com/interchange/AdvancedVehicleSearch/';
  const locations=[19,27,14,6,13,22,17,8,12,10,15,18,29,30,20,11,7,24,5,16,9,4,3,21,25];
- const headers={'accept':'application/json, text/plain, */*','content-type':'application/json;charset=UTF-8','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.5'};
+ const headers={'accept':'application/json, text/plain, */*','content-type':'application/json;charset=UTF-8','origin':'https://www.pullapart.com','referer':'https://www.pullapart.com/inventory-v2/search/','user-agent':'Mozilla/5.0 Georgia-Junkyard-Inventory-Search/9.5.7'};
  const targetMake=canonicalMake(make), targetModel=canonicalModel(model);
  const started=Date.now(), query=[make,model].filter(Boolean).join(' ');
- let t=papTelemetryBase(query,started); t.version='9.5.5'; t.catalogSource=''; t.cacheHit=false;
+ let t=papTelemetryBase(query,started); t.version='9.5.6'; t.catalogSource=''; t.cacheHit=false;
  const rawData=[];
 
  async function runMakeId(makeId,timeoutMs=5000){
@@ -256,6 +321,7 @@ async function fetchPullApartSearch(make,model){
   t.targetMakeRecords=makeRows.length;
   t.targetModelRecords=modelRows.length;
   t.modelsSeen=[...new Set(makeRows.map(v=>String(v.modelName||'').trim()).filter(Boolean))].sort().slice(0,150);
+  t.modelCatalog=papModelCatalogAssessment(targetMake,targetModel);
   t.locationsSeen=[...new Set(rawData.map(v=>`${v.locationID||''}:${v.locationName||pullApartCatalog.locations.get(Number(v.locationID))||''}`).filter(x=>x!==':'))].sort().slice(0,150);
   const out=[];
   for(const v of modelRows){
@@ -270,7 +336,7 @@ async function fetchPullApartSearch(make,model){
   if(rows.length){t.stage='PARSED_RESULTS';t.diagnostic=`Official Pull-A-Part results parsed for ${targetMake} ${targetModel}; ${rows.length} Georgia vehicle(s) mapped.`}
   else if(!t.makeId){t.stage=t.timeouts?'MAKE_DISCOVERY_INCOMPLETE':'MAKE_NOT_FOUND';t.diagnostic=t.timeouts?`Could not finish make discovery for ${targetMake} because the legacy service timed out. No stale make ID was cached.`:`No Pull-A-Part make ID could be resolved for ${targetMake}.`}
   else if(!makeRows.length){t.stage='MAKE_MAPPING_REJECTED';t.diagnostic=`Resolved make ID ${t.makeId} did not return authoritative ${targetMake} rows; the mapping was discarded.`;pullApartMakeIdCache.delete(targetMake);savePapMakeCache();}
-  else if(!modelRows.length){t.stage='MODEL_NOT_PRESENT';t.diagnostic=`Pull-A-Part returned ${makeRows.length} ${targetMake} record(s), but none matched ${targetModel}. Models returned: ${t.modelsSeen.join(', ')||'none'}.`}
+  else if(!modelRows.length){t.stage='MODEL_NOT_IN_RETURNED_INVENTORY';t.diagnostic=`Pull-A-Part returned ${makeRows.length} ${targetMake} record(s), but none matched ${targetModel}. Observed models in the returned inventory: ${t.modelsSeen.join(', ')||'none'}. This does not prove ${targetModel} is absent from Pull-A-Part's master model catalog.`}
   else {t.stage='LOCATION_MAPPING_ZERO';t.diagnostic=`${modelRows.length} ${targetMake} ${targetModel} record(s) were returned, but none mapped to Atlanta East/North/South/Augusta. Inspect locationsSeen.`}
   t.learnedMakeId=pullApartMakeIdCache.get(targetMake)||null;
   t.persistedMakeCount=pullApartMakeIdCache.size;
@@ -526,6 +592,18 @@ const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=u
 let cache={at:0,data:null};
 const server=http.createServer(async(req,res)=>{try{
  if(req.url==='/api/health'){res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify({ok:true,service:'Georgia Junkyard Inventory Search',version:BUILD_VERSION,time:new Date().toISOString(),yards:YARDS.length}))}
+ if(req.url.startsWith('/api/pullapart-site-discovery')){
+  const result=await pullApartSiteDiscovery();
+  res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
+  return res.end(JSON.stringify(result,null,2));
+ }
+ if(req.url.startsWith('/api/pullapart-model-catalog')){
+  const u=new URL(req.url,'http://localhost');
+  const make=u.searchParams.get('make')||'';
+  const model=u.searchParams.get('model')||'';
+  res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
+  return res.end(JSON.stringify({version:BUILD_VERSION,generatedAt:new Date().toISOString(),catalog:papModelCatalogAssessment(make,model),note:'v9.5.6 deliberately distinguishes observed official inventory models from a complete master model catalog. A model not observed here is not declared invalid.'},null,2));
+ }
  if(req.url==='/api/pullapart-diagnostics'){
   res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
   return res.end(JSON.stringify({version:BUILD_VERSION,generatedAt:new Date().toISOString(),cache:Object.fromEntries(pullApartMakeIdCache.entries()),catalog:{lastUpdated:pullApartCatalog.lastUpdated,makes:Object.fromEntries(pullApartCatalog.makes.entries()),models:Object.fromEntries([...pullApartCatalog.models.entries()].map(([make,m])=>[make,[...m.values()]])),locations:Object.fromEntries(pullApartCatalog.locations.entries())},diagnostics:[...papDeepDiagnostics.entries()].map(([query,v])=>({query,...v}))},null,2));
