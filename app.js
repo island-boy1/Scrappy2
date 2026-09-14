@@ -2,6 +2,17 @@ const state={inventory:[],yards:[],filtered:[],searchDiagnostics:[]};
 const $=id=>document.getElementById(id);
 const norm=v=>(v??'').toString().trim().toLowerCase();
 const compact=v=>norm(v).replace(/[^a-z0-9]+/g,'');
+const arrivalFmt=new Intl.DateTimeFormat('en-US',{year:'numeric',month:'short',day:'numeric'});
+function formatArrival(row){
+ const raw=row?.arrivalDate||row?.arrival; if(!raw)return '—';
+ const d=new Date(row?.arrivalDate||(/^\d{4}-\d{2}-\d{2}$/.test(String(raw))?String(raw)+'T00:00:00':raw));
+ return Number.isNaN(d.getTime())?String(row.arrival||raw):arrivalFmt.format(d);
+}
+function resultFeature(row){
+ if(row?.pullApart?.locID&&row?.pullApart?.ticketID&&row?.pullApart?.lineID) return '<span class="vehicle-feature" title="Official Pull-A-Part details and published photo are checked when opened">DETAILS + PHOTO</span>';
+ if(row?.sourceUrl) return '<span class="vehicle-feature vehicle-feature-muted" title="Source page available">SOURCE PAGE</span>';
+ return '';
+}
 function matches(value,query){return !query||norm(value).includes(query)||compact(value).includes(compact(query))}
 async function load(make='',model=''){
  const selectedYard=$('yard')?.value||'';
@@ -40,7 +51,7 @@ function search(){
  $('resultCount').textContent=state.filtered.length.toLocaleString();
  $('yardCount').textContent=new Set(state.filtered.map(x=>x.yardId)).size;
  $('liveCount').textContent=new Set(state.filtered.filter(x=>x.verifiedSource===true).map(x=>x.yardId)).size;
- $('results').innerHTML=state.filtered.slice(0,1000).map((row,i)=>`<tr><td><strong>${esc(row.yard)}</strong><br><span class="muted">${row.diy?'DIY / U-Pull':'Full service'}</span></td><td>${esc(row.year)}</td><td>${esc(row.make)}</td><td>${esc(row.model)}</td><td>${esc(row.submodel||'—')}</td><td>${esc(row.body||'—')}</td><td>${esc(row.row||'—')}</td><td>${esc(row.vin||row.stock||'—')}</td><td>${esc(row.arrival||'—')}</td><td>${sourceBadge(row)}<div class="small">${esc(row.sourceLabel||'')}</div></td><td><button class="detail-btn" data-i="${i}">View vehicle</button></td></tr>`).join('');
+ $('results').innerHTML=state.filtered.slice(0,1000).map((row,i)=>`<tr class="result-row"><td data-label="Yard"><strong>${esc(row.yard)}</strong><br><span class="muted">${row.diy?'DIY / U-Pull':'Full service'}</span></td><td data-label="Year">${esc(row.year)}</td><td data-label="Make">${esc(row.make)}</td><td data-label="Model"><strong>${esc(row.model)}</strong><div>${resultFeature(row)}</div></td><td data-label="Sub model / trim">${esc(row.submodel||'—')}</td><td data-label="Body">${esc(row.body||'—')}</td><td data-label="Row">${esc(row.row||'—')}</td><td data-label="VIN / Stock"><span class="vin-stock">${esc(row.vin||row.stock||'—')}</span></td><td data-label="Arrival">${esc(formatArrival(row))}</td><td data-label="Source">${sourceBadge(row)}<div class="small">${esc(row.sourceLabel||'')}</div></td><td data-label="Detail"><button class="detail-btn" data-i="${i}">View</button></td></tr>`).join('');
  document.querySelectorAll('.detail-btn').forEach(b=>b.onclick=()=>openDetail(state.filtered[+b.dataset.i]));
  $('empty').style.display=state.filtered.length?'none':'block';
  renderMap();
@@ -92,12 +103,12 @@ renderAlerts();
 
 async function openDetail(row){
  $('detailModal').hidden=false;
- $('detailContent').innerHTML=`<div class="detail-head"><div><p class="eyebrow">VEHICLE DETAIL</p><h2>${esc(row.year)} ${esc(row.make)} ${esc(row.model)}</h2><p>${esc(row.submodel||'')} · ${esc(row.yard)}</p></div>${sourceBadge(row)}</div><div class="detail-grid"><div><strong>VIN</strong><span>${esc(row.vin||'Not published')}</span></div><div><strong>Stock</strong><span>${esc(row.stock||'Not published')}</span></div><div><strong>Row</strong><span>${esc(row.row||'Not published')}</span></div><div><strong>Arrival</strong><span>${esc(row.arrival||'Not published')}</span></div><div><strong>Body</strong><span>${esc(row.body||'Not published')}</span></div><div><strong>Drive</strong><span>${esc(row.drive||'Not published')}</span></div></div><div id="papExtended" class="source-detail" hidden></div><div id="photoArea" class="photo-area">Checking for a published vehicle photo…</div><div class="source-detail"><strong>Inventory provenance</strong><span>${esc(row.sourceLabel||row.sourceType||'Unknown')} · ${esc(row.sourceTrust||'MANUAL')}</span>${row.sourceTrust==='FALLBACK'?'<small>Fallback records should be verified with the yard before travel.</small>':''}</div><div class="detail-actions">${row.sourceUrl?`<a class="primary-link" href="${esc(row.sourceUrl)}" target="_blank" rel="noopener">Open yard vehicle/source page</a>`:''}${row.vin?`<button class="secondary" onclick="decodeDetailVIN('${esc(row.vin)}')">Decode VIN</button>`:''}</div><div id="detailDecode" class="vin-result"></div></div>`;
+ $('detailContent').innerHTML=`<div class="detail-head"><div><p class="eyebrow">VEHICLE DETAIL</p><h2>${esc(row.year)} ${esc(row.make)} ${esc(row.model)}</h2><p>${esc(row.submodel||'')} ${row.submodel?'· ':''}${esc(row.yard)}</p></div><div class="detail-head-badges">${sourceBadge(row)}${resultFeature(row)}</div></div><div class="detail-layout"><div class="detail-info-panel"><div class="detail-grid"><div><strong>VIN</strong><span class="detail-vin">${esc(row.vin||'Not published')}</span></div><div><strong>Stock</strong><span>${esc(row.stock||'Not published')}</span></div><div><strong>Row</strong><span>${esc(row.row||'Not published')}</span></div><div><strong>Arrival</strong><span>${esc(row.arrival?formatArrival(row):'Not published')}</span></div><div><strong>Body</strong><span>${esc(row.body||'Not published')}</span></div><div><strong>Drive</strong><span>${esc(row.drive||'Not published')}</span></div></div><div id="papExtended" class="source-detail" hidden></div><div class="source-detail provenance-card"><strong>Inventory provenance</strong><span>${esc(row.sourceLabel||row.sourceType||'Unknown')} · ${esc(row.sourceTrust||'MANUAL')}</span>${row.sourceTrust==='FALLBACK'?'<small>Fallback records should be verified with the yard before travel.</small>':''}</div><div class="detail-actions">${row.sourceUrl?`<a class="primary-link" href="${esc(row.sourceUrl)}" target="_blank" rel="noopener">Open source</a>`:''}${row.vin?`<button class="secondary" onclick="decodeDetailVIN('${esc(row.vin)}')">Decode VIN</button>`:''}</div><div id="detailDecode" class="vin-result"></div></div><div class="detail-media-panel"><div id="photoArea" class="photo-area photo-loading"><div class="photo-placeholder">Checking for a published vehicle photo…</div></div></div></div>`;
  if(row.pullApart?.locID&&row.pullApart?.ticketID&&row.pullApart?.lineID){
   try{
    const q=new URLSearchParams({locID:row.pullApart.locID,ticketID:row.pullApart.ticketID,lineID:row.pullApart.lineID});
    const r=await fetch('/api/pullapart-vehicle?'+q.toString()); const d=await r.json();
-   if(d.image){$('photoArea').innerHTML=`<img src="${esc(d.image)}" alt="${esc(row.year+' '+row.make+' '+row.model)}" class="vehicle-photo"><p class="muted">Photo published by Pull-A-Part.</p>`}else $('photoArea').innerHTML='<p class="muted">No Pull-A-Part vehicle photo was available.</p>';
+   $('photoArea').classList.remove('photo-loading'); if(d.image){$('photoArea').innerHTML=`<img src="${esc(d.image)}" alt="${esc(row.year+' '+row.make+' '+row.model)}" class="vehicle-photo"><p class="muted">Photo published by Pull-A-Part.</p>`}else $('photoArea').innerHTML='<p class="muted">No Pull-A-Part vehicle photo was available.</p>';
    const info=d.extendedInfo;
    if(info){
     const obj=Array.isArray(info)?(info[0]||{}):info;
@@ -107,9 +118,9 @@ async function openDetail(row){
     if(!pairs.length&&obj&&typeof obj==='object') for(const [k,v] of Object.entries(obj)){if(v!=null&&typeof v!=='object'&&String(v).trim()&&pairs.length<8)pairs.push([k,v])}
     if(pairs.length){$('papExtended').hidden=false;$('papExtended').innerHTML=`<strong>Pull-A-Part vehicle information</strong><div class="detail-grid">${pairs.map(([k,v])=>`<div><strong>${esc(k.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase()))}</strong><span>${esc(v)}</span></div>`).join('')}</div>`}
    }
-  }catch(e){$('photoArea').innerHTML='<p class="muted">Pull-A-Part detail lookup unavailable.</p>'}
+  }catch(e){$('photoArea').classList.remove('photo-loading');$('photoArea').innerHTML='<p class="muted">Pull-A-Part detail lookup unavailable.</p>'}
  } else if(row.sourceUrl){
-  try{const r=await fetch('/api/vehicle?url='+encodeURIComponent(row.sourceUrl));const d=await r.json();if(d.image){$('photoArea').innerHTML=`<img src="${esc(d.image)}" alt="${esc(row.year+' '+row.make+' '+row.model)}" class="vehicle-photo"><p class="muted">Photo published by the yard/source.</p>`}else $('photoArea').innerHTML='<p class="muted">No public vehicle photo was found on this source page.</p>'}catch(e){$('photoArea').innerHTML='<p class="muted">Photo lookup unavailable; use the source link above.</p>'}
+  try{const r=await fetch('/api/vehicle?url='+encodeURIComponent(row.sourceUrl));const d=await r.json();$('photoArea').classList.remove('photo-loading');if(d.image){$('photoArea').innerHTML=`<img src="${esc(d.image)}" alt="${esc(row.year+' '+row.make+' '+row.model)}" class="vehicle-photo"><p class="muted">Photo published by the yard/source.</p>`}else $('photoArea').innerHTML='<p class="muted">No public vehicle photo was found on this source page.</p>'}catch(e){$('photoArea').classList.remove('photo-loading');$('photoArea').innerHTML='<p class="muted">Photo lookup unavailable; use the source link above.</p>'}
  }
 }
 async function decodeDetailVIN(vin){$('detailDecode').textContent='Decoding…';try{const r=await fetch('/api/vin/'+encodeURIComponent(vin));const d=await r.json();const x=d.Results||[];const get=k=>(x.find(v=>v.Variable===k)||{}).Value||'';$('detailDecode').innerHTML=`<strong>${esc(get('Model Year'))} ${esc(get('Make'))} ${esc(get('Model'))}</strong><br>${esc(get('Trim'))} ${esc(get('Drive Type'))} · ${esc(get('Body Class'))}`}catch(e){$('detailDecode').textContent='VIN decode unavailable.'}}

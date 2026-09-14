@@ -1,6 +1,6 @@
 {
   "name": "georgia-junkyard-inventory-search",
-  "version": "9.5.9",
+  "version": "9.6.0",
   "private": true,
   "description": "Georgia junkyard inventory aggregator with current Pull-A-Part Inventory Service connector",
   "scripts": {
