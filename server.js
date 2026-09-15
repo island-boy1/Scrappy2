@@ -1,6 +1,6 @@
 const http=require('http'),fs=require('fs'),path=require('path');
 const PORT=process.env.PORT||3000,ROOT=__dirname;
-const BUILD_VERSION='9.6.1';
+const BUILD_VERSION='9.6.2';
 const papDeepDiagnostics=new Map();
 
 const raw=[
@@ -460,21 +460,32 @@ async function fetchHighway82(){
  return (await fetchPublicIndexedYard('https://hwy82pp.com/search-inventory/','highway82','Highway 82 Pick & Pay')).map(x=>({...x,sourceType:'official-public-html',live:true}));
 }
 
-async function fetchPypYard(id,name,base,maxPages=20){
+async function fetchPypYard(id,name,base,maxPages=75){
+ // PYP inventory is paginated and the page count changes as vehicles enter/leave the yard.
+ // Walk pages in order and stop after the first empty/end-of-results page instead of using
+ // the old 20-page ceiling, which truncated larger yards such as Fayetteville.
  const rows=[];
- let next=1;
- async function worker(){
-  while(next<=maxPages){
-   const page=next++;
-   const url=page===1?base:base+'?page='+page;
-   try{
-    const html=await fetchText(url);
-    const parsed=parsePyp(html,id,name,url);
-    rows.push(...parsed);
-   }catch(e){console.error(`PYP ${name} page ${page} failed:`,e.message)}
+ let emptyPages=0;
+ for(let page=1;page<=maxPages;page++){
+  const url=page===1?base:base+'?page='+page;
+  try{
+   const html=await fetchText(url);
+   const parsed=parsePyp(html,id,name,url);
+   if(!parsed.length){
+    emptyPages++;
+    if(emptyPages>=1 || /End of Results/i.test(strip(html))) break;
+    continue;
+   }
+   emptyPages=0;
+   rows.push(...parsed);
+   // If PYP no longer offers a next page, this is the final inventory page.
+   if(page>1 && !/Next Page/i.test(strip(html))) break;
+  }catch(e){
+   console.error(`PYP ${name} page ${page} failed:`,e.message);
+   // A transient page failure should not discard already collected official inventory.
+   break;
   }
  }
- await Promise.all(Array.from({length:5},worker));
  return dedupeInventory(rows);
 }
 
@@ -504,7 +515,7 @@ async function fetchInventory(filters={}){
 
  // PYP: official paginated inventory. v9.4 expands coverage and limits concurrency to stay polite.
  for(const [id,name,base] of [['pyp-fayetteville','Pick Your Part Fayetteville','https://www.pyp.com/inventory/fayetteville-1229/'],['pyp-savannah','Pick Your Part Savannah','https://www.pyp.com/inventory/savannah-1163/']]){
-  all.push(...await fetchPypYard(id,name,base,20));
+  all.push(...await fetchPypYard(id,name,base,75));
  }
  if(filters.make&&filters.model){
   all.push(...await fetchPullApartSearch(filters.make,filters.model));
